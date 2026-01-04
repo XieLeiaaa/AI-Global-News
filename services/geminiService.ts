@@ -1,78 +1,112 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NewsRegion, NewsSector, NewsItem, GroundingSource } from "../types";
 
 export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[], sources: GroundingSource[] }> => {
-  // 1. 获取 Key
-  const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found. Please check Vercel environment variables.");
+  // 1. 获取 Keys
+  const deepseekKey = import.meta.env.VITE_DEEPSEEK_API_KEY;
+  const tavilyKey = import.meta.env.VITE_TAVILY_API_KEY;
+
+  if (!deepseekKey || !tavilyKey) {
+    throw new Error("请在 Vercel 设置 VITE_DEEPSEEK_API_KEY 和 VITE_TAVILY_API_KEY");
   }
 
-  // 2. 初始化稳定版 SDK
-  const genAI = new GoogleGenerativeAI(apiKey);
-  
-  // 3. 使用最广泛支持的模型 gemini-1.5-flash
-  const model = genAI.getGenerativeModel({ 
-  // ✅ 使用具体的稳定版本号 "gemini-1.5-flash-001"
-  // 或者尝试 "gemini-1.5-flash-8b" (更轻量级)
-  model: "gemini-1.5-pro", 
-  generationConfig: { responseMimeType: "application/json" } 
-});
+  // 2. 第一步：搜索新闻 (使用 Vercel 转发，绕过国内网络限制)
+  // 我们搜索“今日科技、AI、金融新闻”
+  const query = `Latest important technology, AI, and finance news in China and the World for ${date}`;
+  let searchResults: any[] = [];
 
+  try {
+    // ⚠️ 注意：这里请求的是 /api/tavily，会自动转发到 api.tavily.com
+    const searchResponse = await fetch("/api/tavily", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: tavilyKey,
+        query: query,
+        search_depth: "basic",
+        max_results: 10,
+        include_images: false
+      }),
+    });
+
+    const searchData = await searchResponse.json();
+    searchResults = searchData.results || [];
+    console.log("搜索结果:", searchResults);
+  } catch (error) {
+    console.error("搜索失败 (Tavily):", error);
+    // 如果搜索挂了，代码继续，让 DeepSeek 尝试兜底
+  }
+
+  // 3. 整理搜索结果给 DeepSeek
+  const context = searchResults.map(r => 
+    `【标题】${r.title}\n【来源】${r.url}\n【内容片段】${r.content}`
+  ).join("\n\n");
+
+  // 4. 第二步：DeepSeek 总结新闻
   const prompt = `
-    Search for today's (${date}) most important news stories. 
-    You MUST find at least 10-15 high-quality, distinct news stories.
+    你是一个专业新闻编辑。请根据以下【搜索结果】写一份今日新闻简报。
     
-    Regions: '国内' (China), '国外' (International/Global)
-    Sectors: '热门', '科技', '金融', 'AI', '创投', '汽车', '股票'.
+    【搜索结果】：
+    ${context}
 
-    Requirements:
-    - Language: Simplified Chinese.
-    - Return a JSON object with a "news" array.
+    【要求】：
+    1. 必须基于搜索结果，不要瞎编。如果你觉得搜索结果不够，可以补充你已知的近期重大事件。
+    2. 语言：简体中文。
+    3. 格式：严格的 JSON。
     
-    Schema:
+    【JSON 结构】：
     {
       "news": [
         {
-          "title": "...",
-          "summary": "...",
-          "region": "国内/国外",
-          "sector": "...",
-          "source": "...",
-          "url": "..."
+          "title": "新闻标题 (中文)",
+          "summary": "简练摘要 (50-100字)",
+          "region": "国内" 或 "国外",
+          "sector": "热门/科技/金融/AI/创投/汽车/股票",
+          "source": "来源媒体名称",
+          "url": "原始链接"
         }
       ]
     }
   `;
 
   try {
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    
-    // 4. 解析数据
-    const parsedData = JSON.parse(text);
-    
-    // 5. 处理 Grounding (旧版 SDK 的结构可能不同，做安全访问)
-    // 注意：标准版 Gemini 1.5 Flash 并不总是返回 groundingMetadata，除非使用了 Search Tool
-    // 这里为了兼容性，我们先返回空源，重点保证新闻能显示
-    const sources: GroundingSource[] = []; 
+    const aiResponse = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${deepseekKey}`
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat", // 使用 V3 模型
+        messages: [
+          { role: "system", content: "你是一个输出 JSON 格式的新闻助手。" },
+          { role: "user", content: prompt }
+        ],
+        response_format: { type: "json_object" }
+      })
+    });
+
+    const aiData = await aiResponse.json();
+    const content = aiData.choices?.[0]?.message?.content || "{}";
+    const parsedData = JSON.parse(content);
+
+    // 5. 组装最终数据
+    const sources: GroundingSource[] = searchResults.map(r => ({
+      title: r.title,
+      uri: r.url
+    }));
 
     const news: NewsItem[] = (parsedData.news || []).map((item: any, index: number) => ({
       ...item,
       id: `news-${index}-${Date.now()}`,
       publishedAt: new Date().toISOString(),
-      region: Object.values(NewsRegion).includes(item.region as NewsRegion) 
-        ? (item.region as NewsRegion) 
-        : NewsRegion.GLOBAL,
-      sector: Object.values(NewsSector).includes(item.sector as NewsSector)
-        ? (item.sector as NewsSector)
-        : NewsSector.TRENDING
+      region: ["国内", "国外"].includes(item.region) ? item.region : "国外",
+      sector: ["热门", "科技", "金融", "AI", "创投", "汽车", "股票"].includes(item.sector) ? item.sector : "热门"
     }));
 
     return { news, sources };
+
   } catch (error: any) {
-    console.error("Gemini API Error:", error);
-    throw new Error(error?.message || "Failed to fetch news.");
+    console.error("DeepSeek 生成失败:", error);
+    throw new Error("新闻生成失败，请检查 API Key 或网络");
   }
 };
