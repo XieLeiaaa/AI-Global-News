@@ -42,7 +42,7 @@ export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[],
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash-002",
+      model: "gemini-1.5-flash-001",
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
