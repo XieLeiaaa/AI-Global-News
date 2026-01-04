@@ -9,11 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "@google/generative-ai": "^0.21.0",  <-- 添加这一行 (新版稳定SDK)
+    "react": "^18.2.0",     <--- 注意这个逗号，必须要有！
+    "react-dom": "^18.2.0", <--- 注意这个逗号
+    "@google/generative-ai": "^0.21.0", <--- 新加的这一行
     "lucide-react": "^0.344.0"
-    "@google/genai": "^1.34.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
