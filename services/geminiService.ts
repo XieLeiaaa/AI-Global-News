@@ -1,86 +1,61 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NewsRegion, NewsSector, NewsItem, GroundingSource } from "../types";
 
 export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[], sources: GroundingSource[] }> => {
-  // 【关键修改】在 Vite 前端项目中，必须用 import.meta.env 读取以 VITE_ 开头的变量
-  // 请确保你在 Vercel 环境变量里设置的名字也是 VITE_GOOGLE_API_KEY
+  // 1. 获取 Key
   const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
-
   if (!apiKey) {
-    throw new Error("API Key not found. Please check Vercel environment variables (Must start with VITE_).");
+    throw new Error("API Key not found. Please check Vercel environment variables.");
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  // 2. 初始化稳定版 SDK
+  const genAI = new GoogleGenerativeAI(apiKey);
   
+  // 3. 使用最广泛支持的模型 gemini-1.5-flash
+  const model = genAI.getGenerativeModel({ 
+    model: "gemini-1.5-flash",
+    // 强制指定 JSON 响应模式，提高稳定性
+    generationConfig: { responseMimeType: "application/json" } 
+  });
+
   const prompt = `
     Search for today's (${date}) most important news stories. 
-    You MUST find at least 10-15 high-quality, distinct news stories for EVERY combination of Region and Sector listed below.
+    You MUST find at least 10-15 high-quality, distinct news stories.
     
     Regions: '国内' (China), '国外' (International/Global)
-    Sectors for EACH region: '热门' (Trending), '科技' (Tech), '金融' (Finance), 'AI', '创投' (VC), '汽车' (Auto), '股票' (Stocks).
+    Sectors: '热门', '科技', '金融', 'AI', '创投', '汽车', '股票'.
 
     Requirements:
-    - Quantity: Return a large batch of news (total 100+ items if possible).
-    - Language: Titles and summaries MUST be in Simplified Chinese.
-    - Quality: Summaries should be concise (around 100 characters) and professional.
-    - Variety: Ensure different sources are represented.
+    - Language: Simplified Chinese.
+    - Return a JSON object with a "news" array.
     
-    Return JSON matching this schema:
+    Schema:
     {
       "news": [
         {
-          "title": "Chinese Title",
-          "summary": "Chinese Summary",
-          "region": "国内 or 国外",
-          "sector": "Exactly one of: 热门, 科技, 金融, AI, 创投, 汽车, 股票",
-          "source": "Source Name",
-          "url": "Original URL"
+          "title": "...",
+          "summary": "...",
+          "region": "国内/国外",
+          "sector": "...",
+          "source": "...",
+          "url": "..."
         }
       ]
     }
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-1.5-pro",
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-        // thinkingConfig: { thinkingBudget: 0 }, // 【已删除】标准 Flash 模型不支持此参数
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            news: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  title: { type: Type.STRING },
-                  summary: { type: Type.STRING },
-                  region: { type: Type.STRING },
-                  sector: { type: Type.STRING },
-                  source: { type: Type.STRING },
-                  url: { type: Type.STRING }
-                },
-                required: ["title", "summary", "region", "sector", "source", "url"]
-              }
-            }
-          }
-        }
-      }
-    });
-
-    const resultText = response.text || "{}";
-    const parsedData = JSON.parse(resultText);
-
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    const sources: GroundingSource[] = groundingChunks
-      .filter((chunk: any) => chunk.web)
-      .map((chunk: any) => ({
-        title: chunk.web.title,
-        uri: chunk.web.uri
-      }));
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    // 4. 解析数据
+    const parsedData = JSON.parse(text);
+    
+    // 5. 处理 Grounding (旧版 SDK 的结构可能不同，做安全访问)
+    // 注意：标准版 Gemini 1.5 Flash 并不总是返回 groundingMetadata，除非使用了 Search Tool
+    // 这里为了兼容性，我们先返回空源，重点保证新闻能显示
+    const sources: GroundingSource[] = []; 
 
     const news: NewsItem[] = (parsedData.news || []).map((item: any, index: number) => ({
       ...item,
@@ -96,7 +71,7 @@ export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[],
 
     return { news, sources };
   } catch (error: any) {
-    console.error("Gemini API Error Detail:", error);
-    throw new Error(error?.message || "Uplink connection failed.");
+    console.error("Gemini API Error:", error);
+    throw new Error(error?.message || "Failed to fetch news.");
   }
 };
