@@ -1,0 +1,5 @@
+{
+  "name": "AI Global News Morning Briefing",
+  "description": "A sophisticated AI-powered news aggregator that fetches, categorizes, and summarizes the latest global news in real-time using Gemini 3 and Google Search grounding.",
+  "requestFramePermissions": []
+}
