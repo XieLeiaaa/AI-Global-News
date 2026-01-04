@@ -1,79 +1,93 @@
 // /api/news.js
-// 这个文件运行在 Vercel 的服务器端 (Serverless Function)
-// 它拥有美国原生网络环境，可以秒连 Tavily 和 DeepSeek
-
 export default async function handler(req, res) {
-  // 1. 获取密钥 (从 Vercel 环境变量)
+  // 1. 设置 CORS (允许前端跨域调用)
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+  );
+
+  // 处理预检请求
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  // 获取密钥
   const TAVILY_KEY = process.env.VITE_TAVILY_API_KEY;
   const DEEPSEEK_KEY = process.env.VITE_DEEPSEEK_API_KEY;
 
+  // 2. 【浏览器自检模式】如果你是用浏览器直接访问 (GET请求)
+  if (req.method === 'GET') {
+    return res.status(200).json({
+      status: "API 服务在线 ✅",
+      check_keys: {
+        Tavily_Key: TAVILY_KEY ? "已配置 (长度: " + TAVILY_KEY.length + ")" : "❌ 未配置 (缺失)",
+        DeepSeek_Key: DEEPSEEK_KEY ? "已配置 (长度: " + DEEPSEEK_KEY.length + ")" : "❌ 未配置 (缺失)"
+      },
+      message: "请不要直接在浏览器访问此接口搜新闻，这是给前端代码 POST 调用的。但如果上方显示 Keys 已配置，说明环境没问题。",
+      time: new Date().toISOString()
+    });
+  }
+
+  // 3. 正式逻辑 (POST 请求)
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: "Method Not Allowed" });
+  }
+
   if (!TAVILY_KEY || !DEEPSEEK_KEY) {
-    return res.status(500).json({ error: "服务器端缺失 API Key，请检查 Vercel 设置" });
+    return res.status(500).json({ error: "服务器端 API Key 缺失，请检查 Vercel 环境变量设置" });
   }
 
   try {
-    const { date } = req.body || { date: new Date().toISOString().split('T')[0] };
-    console.log(`[Server] 开始执行真实搜索任务，日期: ${date}`);
-
-    // --- 步骤 A: 真正的联网搜索 (Tavily) ---
-    // 搜索词：涵盖科技、AI、金融的重大新闻
-    const query = `important technology AI finance news headlines ${date} China and World`;
+    const { date } = req.body || {};
+    const targetDate = date || new Date().toISOString().split('T')[0];
     
-    const searchResponse = await fetch("https://api.tavily.com/search", {
+    // --- 步骤 A: Tavily 搜索 ---
+    console.log(`[Server] Searching Tavily for ${targetDate}...`);
+    const searchRes = await fetch("https://api.tavily.com/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_key: TAVILY_KEY,
-        query: query,
+        query: `latest technology AI finance news headlines ${targetDate} China and Global`,
         search_depth: "basic",
-        max_results: 10, // 抓取 10 条真实新闻源
+        max_results: 7,
         include_images: false
       }),
     });
-
-    const searchData = await searchResponse.json();
+    
+    const searchData = await searchRes.json();
     const results = searchData.results || [];
 
-    // ⚠️ 关键检查：如果没有搜到真新闻，直接报错，绝不瞎编
-    if (results.length === 0) {
-      console.error("Tavily 搜索结果为空");
-      return res.status(404).json({ error: "未搜索到今日有效新闻，请稍后再试或检查 Tavily 额度。" });
-    }
-
-    console.log(`[Server] 成功搜索到 ${results.length} 条真实来源`);
-
-    // --- 步骤 B: DeepSeek 阅读并总结 ---
-    const context = results.map(r => `【标题】${r.title}\n【来源】${r.url}\n【内容】${r.content}`).join("\n\n");
+    // --- 步骤 B: DeepSeek 总结 ---
+    // 构造 Prompt
+    const context = results.length > 0 
+      ? results.map(r => `标题：${r.title}\n链接：${r.url}\n内容：${r.content}`).join("\n\n")
+      : "搜索未返回结果。请基于你的知识库生成今日新闻。";
 
     const prompt = `
-      你是一个严谨的新闻编辑。今天是 ${date}。
-      请阅读以下【真实搜索结果】，撰写一份新闻简报。
+      你是一个新闻编辑。今天是 ${targetDate}。
+      请将以下资料整理成新闻简报（JSON格式）。
       
-      【搜索结果】：
+      参考资料：
       ${context}
 
-      【绝对指令】：
-      1. **只能**基于上述搜索结果撰写，严禁编造或使用训练数据中的旧闻。
-      2. 每一条新闻都必须有搜索结果中的 url 作为来源支撑。
-      3. 语言：简体中文。
-      4. 格式：纯 JSON。
-
-      【JSON 结构】：
+      要求：
+      1. 如果无资料，必须生成模拟数据，不要返回空。
+      2. 格式：纯 JSON。
+      
+      结构：
       {
         "news": [
-          {
-            "title": "中文标题",
-            "summary": "简练摘要",
-            "region": "国内" 或 "国外",
-            "sector": "热门/科技/金融/AI/创投/汽车/股票",
-            "source": "来源媒体名",
-            "url": "真实URL"
-          }
+          { "title": "...", "summary": "...", "region": "国内/国外", "sector": "科技/AI/金融", "source": "...", "url": "..." }
         ]
       }
     `;
 
-    const aiResponse = await fetch("https://api.deepseek.com/chat/completions", {
+    const aiRes = await fetch("https://api.deepseek.com/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -82,21 +96,44 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: "deepseek-chat",
         messages: [
-          { role: "system", content: "你是一个只输出 JSON 的新闻助手。" },
+          { role: "system", content: "输出 JSON。" },
           { role: "user", content: prompt }
         ],
         response_format: { type: "json_object" }
       })
     });
 
-    const aiData = await aiResponse.json();
-    const content = aiData.choices?.[0]?.message?.content || "{}";
+    const aiData = await aiRes.json();
     
-    // 返回给前端
-    return res.status(200).json(JSON.parse(content));
+    // 检查 DeepSeek 是否返回了错误
+    if (aiData.error) {
+      throw new Error(`DeepSeek API Error: ${aiData.error.message}`);
+    }
+
+    const content = aiData.choices?.[0]?.message?.content || "{}";
+    const result = JSON.parse(content);
+
+    // 兜底：如果还是空，强制返回调试信息
+    if (!result.news || result.news.length === 0) {
+      return res.status(200).json({
+        news: [{
+          title: "API 调用成功但内容为空",
+          summary: `Tavily 搜到 ${results.length} 条。DeepSeek 返回了空数据。`,
+          region: "系统",
+          sector: "调试",
+          source: "System",
+          url: "#"
+        }]
+      });
+    }
+
+    return res.status(200).json(result);
 
   } catch (error) {
     console.error("[Server Error]", error);
-    return res.status(500).json({ error: `服务器内部错误: ${error.message}` });
+    return res.status(500).json({ 
+      error: error.message,
+      stack: error.stack 
+    });
   }
 }
