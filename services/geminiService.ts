@@ -13,10 +13,11 @@ export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[],
   
   // 3. 使用最广泛支持的模型 gemini-1.5-flash
   const model = genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash",
-    // 强制指定 JSON 响应模式，提高稳定性
-    generationConfig: { responseMimeType: "application/json" } 
-  });
+  // ✅ 使用具体的稳定版本号 "gemini-1.5-flash-001"
+  // 或者尝试 "gemini-1.5-flash-8b" (更轻量级)
+  model: "gemini-1.5-flash-001", 
+  generationConfig: { responseMimeType: "application/json" } 
+});
 
   const prompt = `
     Search for today's (${date}) most important news stories. 
