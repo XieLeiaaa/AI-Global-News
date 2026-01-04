@@ -1,10 +1,16 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { NewsRegion, NewsSector, NewsItem, GroundingSource } from "../types";
 
 export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[], sources: GroundingSource[] }> => {
-  // 必须在函数内部初始化，确保获取最新的 process.env.API_KEY
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // 【关键修改】在 Vite 前端项目中，必须用 import.meta.env 读取以 VITE_ 开头的变量
+  // 请确保你在 Vercel 环境变量里设置的名字也是 VITE_GOOGLE_API_KEY
+  const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("API Key not found. Please check Vercel environment variables (Must start with VITE_).");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   
   const prompt = `
     Search for today's (${date}) most important news stories. 
@@ -41,7 +47,7 @@ export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[],
       config: {
         tools: [{ googleSearch: {} }],
         responseMimeType: "application/json",
-        thinkingConfig: { thinkingBudget: 0 }, // 禁用思考过程以降低延迟
+        // thinkingConfig: { thinkingBudget: 0 }, // 【已删除】标准 Flash 模型不支持此参数
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -91,7 +97,6 @@ export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[],
     return { news, sources };
   } catch (error: any) {
     console.error("Gemini API Error Detail:", error);
-    // 抛出具体错误，让 UI 层能捕获并反馈
     throw new Error(error?.message || "Uplink connection failed.");
   }
 };
