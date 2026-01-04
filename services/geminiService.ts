@@ -36,7 +36,7 @@ export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[],
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
