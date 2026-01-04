@@ -15,7 +15,7 @@ export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[],
   const model = genAI.getGenerativeModel({ 
   // ✅ 使用具体的稳定版本号 "gemini-1.5-flash-001"
   // 或者尝试 "gemini-1.5-flash-8b" (更轻量级)
-  model: "gemini-1.5-flash-001", 
+  model: "gemini-1.5-pro", 
   generationConfig: { responseMimeType: "application/json" } 
 });
 
