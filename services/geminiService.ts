@@ -2,9 +2,10 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { NewsRegion, NewsSector, NewsItem, GroundingSource } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[], sources: GroundingSource[] }> => {
+  // 必须在函数内部初始化，确保获取最新的 process.env.API_KEY
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
   const prompt = `
     Search for today's (${date}) most important news stories. 
     You MUST find at least 10-15 high-quality, distinct news stories for EVERY combination of Region and Sector listed below.
@@ -40,6 +41,7 @@ export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[],
       config: {
         tools: [{ googleSearch: {} }],
         responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 0 }, // 禁用思考过程以降低延迟
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -87,8 +89,9 @@ export const fetchLatestNews = async (date: string): Promise<{ news: NewsItem[],
     }));
 
     return { news, sources };
-  } catch (error) {
-    console.error("Error fetching news from Gemini:", error);
-    throw error;
+  } catch (error: any) {
+    console.error("Gemini API Error Detail:", error);
+    // 抛出具体错误，让 UI 层能捕获并反馈
+    throw new Error(error?.message || "Uplink connection failed.");
   }
 };

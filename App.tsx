@@ -74,10 +74,17 @@ const App: React.FC = () => {
       setSources(result.sources);
       setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
       setVisibleCount(10); 
-    } catch (err) {
-      setError('Connection to intelligence relay failed.');
+    } catch (err: any) {
+      console.error("Uplink Error Caught:", err);
+      // 提供更详细的错误原因
+      if (err.message?.includes('API_KEY')) {
+        setError('API Key 配置异常，请检查 Vercel 环境变量设置。');
+      } else {
+        setError(err.message || '与智能中继服务器的连接超时，请稍后重试。');
+      }
     } finally {
-      setTimeout(() => setLoading(false), 1200); 
+      // 增加一个最小加载时间，优化视觉上的平滑度
+      setTimeout(() => setLoading(false), 800); 
     }
   }, []);
 
@@ -98,13 +105,12 @@ const App: React.FC = () => {
 
   const handleLoadMore = async () => {
     setLoadMoreLoading(true);
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 600));
     setVisibleCount(p => p + 10);
     setLoadMoreLoading(false);
   };
 
   const sectors: (NewsSector | '全部')[] = ['全部', ...Object.values(NewsSector)];
-  const parallaxOffset = Math.min(scrollY * 0.05, 12);
 
   if (loading) return <LoadingNeural />;
 
@@ -117,7 +123,6 @@ const App: React.FC = () => {
         />
       </div>
 
-      {/* Primary Header - Now holds Regions and Toggles */}
       <nav className="sticky top-0 z-50 glass border-b dark:border-white/5 transition-colors">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-3 group cursor-pointer" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
@@ -131,7 +136,6 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4">
-            {/* Region Switcher Segmented Control */}
             <div className="flex bg-slate-100 dark:bg-slate-800/50 p-1 rounded-2xl border dark:border-white/5">
               {Object.values(NewsRegion).map((region) => (
                 <button
@@ -167,7 +171,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Secondary Navigation - Sector List moved here */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 overflow-x-auto no-scrollbar py-3 border-t dark:border-white/5 flex items-center gap-2 sm:justify-center">
           {sectors.map(sector => (
             <button
@@ -201,11 +204,14 @@ const App: React.FC = () => {
         )}
 
         {error ? (
-          <div className="py-32 text-center max-w-lg mx-auto">
-            <h3 className="text-2xl font-black dark:text-white mb-4">UPLINK DROPPED</h3>
-            <p className="text-slate-500 text-sm mb-12">{error}</p>
-            <button onClick={generateBriefing} className="px-10 py-5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-3xl font-black text-xs uppercase transition-all">
-              RETRY
+          <div className="py-24 text-center max-w-lg mx-auto bg-slate-50 dark:bg-slate-900/40 rounded-[3rem] border-2 border-dashed border-slate-200 dark:border-white/5 px-8">
+            <div className="w-20 h-20 bg-rose-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+              <i className="fa-solid fa-satellite-dish text-rose-500 text-2xl"></i>
+            </div>
+            <h3 className="text-xl font-black dark:text-white mb-4">UPLINK DROPPED</h3>
+            <p className="text-slate-500 text-sm mb-10 font-medium leading-relaxed">{error}</p>
+            <button onClick={generateBriefing} className="w-full py-5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95">
+              RETRY UPLINK
             </button>
           </div>
         ) : (
@@ -229,7 +235,7 @@ const App: React.FC = () => {
                   className={`px-16 py-6 rounded-[2.5rem] font-black text-[11px] tracking-[0.3em] uppercase transition-all active:scale-95 border-2 ${
                     loadMoreLoading 
                       ? 'bg-slate-50 dark:bg-slate-900 text-slate-300 border-slate-100' 
-                      : 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white border-slate-900 dark:border-white shadow-xl'
+                      : 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white border-slate-900 dark:border-white shadow-xl hover:shadow-2xl'
                   }`}
                 >
                   {loadMoreLoading ? <i className="fa-solid fa-circle-notch animate-spin"></i> : 'EXPAND HORIZON'}
@@ -240,7 +246,6 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Persistent Controls */}
       <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 p-2 bg-slate-900/95 dark:bg-white/10 backdrop-blur-2xl rounded-[2rem] border border-white/10 shadow-2xl">
         <button 
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
