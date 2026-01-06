@@ -1,67 +1,47 @@
 // /api/news.js
-// 生产级新闻聚合引擎 (双模版：DeepSeek + Groq 自动切换)
+// 生产级新闻聚合引擎 (高密度版：6路并发 + 原始数据混合模式)
 
 export default async function handler(req, res) {
   // 1. 设置跨域
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS,GET');
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // 2. 获取密钥 (同时支持 DeepSeek 和 Groq)
+  // 2. 获取密钥
   const TAVILY_KEY = process.env.VITE_TAVILY_API_KEY || process.env.TAVILY_API_KEY;
   const DEEPSEEK_KEY = process.env.VITE_DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY;
   const GROQ_KEY = process.env.VITE_GROQ_API_KEY || process.env.GROQ_API_KEY;
 
-  // 3. 智能选择引擎
-  let AI_PROVIDER = "none";
-  let AI_KEY = "";
-  let AI_URL = "";
-  let AI_MODEL = "";
+  let AI_KEY = DEEPSEEK_KEY || GROQ_KEY;
+  let AI_URL = DEEPSEEK_KEY ? "https://api.deepseek.com/chat/completions" : "https://api.groq.com/openai/v1/chat/completions";
+  let AI_MODEL = DEEPSEEK_KEY ? "deepseek-chat" : "llama-3.3-70b-versatile";
 
-  if (DEEPSEEK_KEY) {
-    AI_PROVIDER = "DeepSeek";
-    AI_KEY = DEEPSEEK_KEY;
-    AI_URL = "https://api.deepseek.com/chat/completions";
-    AI_MODEL = "deepseek-chat";
-  } else if (GROQ_KEY) {
-    AI_PROVIDER = "Groq";
-    AI_KEY = GROQ_KEY;
-    AI_URL = "https://api.groq.com/openai/v1/chat/completions";
-    AI_MODEL = "llama-3.3-70b-versatile"; // Groq 上最强的模型
-  }
-
-  // 4. 诊断：如果两个都没有，才报错
-  if (!TAVILY_KEY || AI_PROVIDER === "none") {
-    return res.status(500).json({ 
-      error: "配置缺失", 
-      debug: {
-        Tavily: TAVILY_KEY ? "✅ OK" : "❌ Missing",
-        AI_Engine: "❌ No DeepSeek or Groq Key found"
-      },
-      tip: "请在 Vercel 设置 VITE_DEEPSEEK_API_KEY 或 VITE_GROQ_API_KEY"
-    });
-  }
-
-  if (req.method === 'GET') {
-     return res.status(200).json({ 
-       status: "News Engine Online", 
-       engine: AI_PROVIDER, // 告诉你当前在用哪个引擎
-       model: AI_MODEL 
-     });
+  if (!TAVILY_KEY || !AI_KEY) {
+    return res.status(500).json({ error: "API Key 缺失" });
   }
 
   try {
-    const { date } = req.body || {};
-    const targetDate = date || new Date().toISOString().split('T')[0];
-    console.log(`[News Engine] 启动 (${AI_PROVIDER}版): ${targetDate}`);
+    const { date, page = 1 } = req.body || {};
+    
+    // 计算日期 (支持翻页时光机)
+    const today = new Date();
+    const pastDate = new Date(today);
+    pastDate.setDate(today.getDate() - (page - 1));
+    const targetDate = pastDate.toISOString().split('T')[0];
 
-    // --- 第一阶段：多路并发召回 (不变) ---
+    console.log(`[High Density Engine] 启动地毯式搜索: ${targetDate} (Page ${page})`);
+
+    // --- 第一阶段：细分赛道 (6路并发) ---
+    // 把搜索颗粒度切细，才能抓到更多长尾新闻
     const topics = [
-      { category: "AI", query: `Artificial Intelligence LLM latest news breakthroughs ${targetDate}` },
-      { category: "Finance", query: `Global Stock Market Crypto Financial news headlines ${targetDate}` },
-      { category: "ChinaTech", query: `China technology startups internet giants news ${targetDate}` }
+      { category: "🤖 AI模型", query: `LLM AI model release DeepSeek OpenAI Anthropic updates ${targetDate}` },
+      { category: "💰 加密/金融", query: `Crypto Bitcoin ETF stock market major moves ${targetDate}` },
+      { category: "📱 消费电子", query: `New smartphones release Apple Xiaomi Huawei rumors ${targetDate}` },
+      { category: "🔌 芯片半导体", query: `Nvidia TSMC Intel AMD chip semiconductor news ${targetDate}` },
+      { category: "🦄 创投融资", query: `Tech startup funding rounds IPO news ${targetDate}` },
+      { category: "🇨🇳 中国科技", query: `China internet giants regulation Baidu Tencent Alibaba news ${targetDate}` }
     ];
 
     const searchPromises = topics.map(async (topic) => {
@@ -72,8 +52,8 @@ export default async function handler(req, res) {
           body: JSON.stringify({
             api_key: TAVILY_KEY,
             query: topic.query,
-            search_depth: "advanced",
-            max_results: 6,
+            search_depth: "basic", // 用 basic 够了，为了省时间，我们靠数量取胜
+            max_results: 8,        // 6个赛道 * 8条 = 48条原料
             include_images: false
           }),
         });
@@ -84,80 +64,120 @@ export default async function handler(req, res) {
 
     const resultsArrays = await Promise.all(searchPromises);
     const allRawResults = resultsArrays.flat();
-    const validResults = allRawResults.filter(item => item.content && item.content.length > 50);
+    
+    // 清洗去重 (保留 URL 和 标题不重复的)
+    const seenMap = new Map();
+    const validResults = allRawResults.filter(item => {
+      if (!item.title) return false;
+      if (seenMap.has(item.url)) return false;
+      seenMap.set(item.url, true);
+      return true;
+    });
 
-    if (validResults.length === 0) {
-      throw new Error("今日全网搜索未获取到有效内容 (Tavily)");
-    }
+    console.log(`[Engine] 抓取到 ${validResults.length} 条有效素材`);
 
-    // --- 第二阶段：AI 加工 ---
+    if (validResults.length === 0) throw new Error("未搜到有效新闻");
+
+    // --- 第二阶段：AI 批量生产 ---
+    // 我们把素材分两批喂给 AI，或者直接要求它列出清单
+    // 为了防止 AI 偷懒合并，我们强制它输出“列表模式”
+    
     const context = validResults.map((r, i) => 
-      `【${r.category}】标题：${r.title}\n摘要：${r.content.substring(0, 300)}\n链接：${r.url}`
-    ).join("\n\n");
+      `${i+1}. [${r.category}] ${r.title} (${r.url})`
+    ).join("\n");
 
     const prompt = `
-      你是一位专业新闻主编。今天是 ${targetDate}。
-      请基于以下【素材库】，整理出一份高质量的早报。
+      日期：${targetDate}。
+      你是一个新闻聚合器。
+      请基于下方的【素材清单】，**尽可能多地**提取出有价值的新闻条目。
       
-      【素材库】：
+      【素材清单】：
       ${context}
 
-      【要求】：
-      1. **合并同类项**：去重、整合。
-      2. **深度摘要**：每条新闻 100-150 字，拒绝一句话新闻。
-      3. **真实性**：必须保留原始 URL。
-      4. **数量**：输出 10-15 条。
-
-      【格式】：
-      纯 JSON。不要使用 Markdown 代码块。
+      【严格要求】：
+      1. **数量最大化**：请从素材中提取 **20 条左右** 的新闻。如果素材足够，不要合并，一条素材生成一条新闻。
+      2. **格式规范**：必须是 JSON。
+      3. **内容真实**：Title 必须翻译成中文，Summary 用中文一句话概括，URL 必须保留原链接。
+      
+      JSON结构:
       {
         "news": [
-          { "title": "...", "summary": "...", "region": "国内/国外", "sector": "科技/AI/金融", "source": "...", "url": "..." }
+          { 
+            "title": "中文标题", 
+            "summary": "简短中文摘要", 
+            "region": "全球", 
+            "sector": "对应分类", 
+            "source": "媒体名", 
+            "url": "原始URL" 
+          }
         ]
       }
     `;
 
     const aiRes = await fetch(AI_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${AI_KEY}`
-      },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${AI_KEY}` },
       body: JSON.stringify({
         model: AI_MODEL,
-        messages: [
-          { role: "system", content: "输出 JSON 格式。" },
-          { role: "user", content: prompt }
-        ],
+        messages: [{ role: "user", content: prompt }],
         temperature: 0.3,
         response_format: { type: "json_object" }
       })
     });
 
     const aiData = await aiRes.json();
-    if (aiData.error) throw new Error(`${AI_PROVIDER} Error: ${aiData.error.message}`);
-
-    const content = aiData.choices?.[0]?.message?.content || "{}";
+    let finalData = { news: [] };
     
-    // 清洗 JSON 字符串 (防止 AI 加 ```json)
-    const cleanContent = content.replace(/```json/g, "").replace(/```/g, "").trim();
-    const finalData = JSON.parse(cleanContent);
+    try {
+      const content = aiData.choices?.[0]?.message?.content || "{}";
+      finalData = JSON.parse(content.replace(/```json/g, "").replace(/```/g, "").trim());
+    } catch (e) {
+      console.error("AI JSON 解析失败", e);
+    }
 
-    return res.status(200).json(finalData);
+    // --- 第三阶段：混合填充 (Hybrid Filling) ---
+    // 如果 AI 生成的新闻少于 10 条，为了保证页面看起来丰富，
+    // 我们把剩下没被 AI 选中的原始搜索结果，直接格式化后补在后面！
+    
+    const aiGeneratedCount = finalData.news?.length || 0;
+    if (aiGeneratedCount < validResults.length) {
+      console.log(`[Engine] AI 只生成了 ${aiGeneratedCount} 条，正在混入原始数据补充...`);
+      
+      // 找出 AI 没用到的素材 (简单通过 URL 比对，或者直接把没出现在结果里的补上)
+      // 这里为了简单粗暴，直接把 AI 结果和 原始结果合并，前端去重
+      const rawExtras = validResults.slice(0, 20).map(item => ({
+        title: item.title, // 原始标题(可能是英文)
+        summary: item.content || "点击查看详情...",
+        region: "全球",
+        sector: item.category,
+        source: "Web Search",
+        url: item.url,
+        is_raw: true // 标记一下这是原始数据
+      }));
+      
+      // 把 AI 生成的放在前面，原始的放在后面作为补充
+      // 注意：这里可能会有重复，但为了“内容多”，暂时接受重复
+      finalData.news = [...(finalData.news || []), ...rawExtras];
+    }
+
+    // 去重 (根据 URL)
+    const uniqueNews = [];
+    const urlSet = new Set();
+    for (const item of finalData.news) {
+      if (!item.url || urlSet.has(item.url)) continue;
+      urlSet.add(item.url);
+      uniqueNews.push(item);
+    }
+
+    console.log(`[Engine] 最终输出 ${uniqueNews.length} 条新闻`);
+
+    return res.status(200).json({
+      news: uniqueNews,
+      meta: { page, date: targetDate, total: uniqueNews.length }
+    });
 
   } catch (error) {
     console.error(error);
-    return res.status(500).json({
-      error: "News Engine Failed",
-      details: error.message,
-      news: [{
-        title: "生成失败",
-        summary: `错误详情: ${error.message} (Engine: ${AI_PROVIDER})`,
-        region: "系统",
-        sector: "错误",
-        source: "System",
-        url: "#"
-      }]
-    });
+    return res.status(500).json({ error: error.message });
   }
 }
